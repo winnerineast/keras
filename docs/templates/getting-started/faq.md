@@ -15,6 +15,7 @@
 - [How can I use stateful RNNs?](#how-can-i-use-stateful-rnns)
 - [How can I remove a layer from a Sequential model?](#how-can-i-remove-a-layer-from-a-sequential-model)
 - [How can I use pre-trained models in Keras?](#how-can-i-use-pre-trained-models-in-keras)
+- [How can I use HDF5 inputs with Keras?](#how-can-i-use-hdf5-inputs-with-keras)
 
 ---
 
@@ -37,6 +38,7 @@ Please cite Keras in your publications if it helps your research. Here is an exa
 ### How can I run Keras on GPU?
 
 If you are running on the TensorFlow backend, your code will automatically run on GPU if any available GPU is detected.
+
 If you are running on the Theano backend, you can use one of the following methods:
 
 Method 1: use Theano flags.
@@ -120,6 +122,7 @@ from keras.models import model_from_json
 model = model_from_json(json_string)
 
 # model reconstruction from YAML
+from keras.models import model_from_yaml
 model = model_from_yaml(yaml_string)
 ```
 
@@ -184,8 +187,8 @@ from keras.models import Model
 model = ...  # create the original model
 
 layer_name = 'my_layer'
-intermediate_layer_model = Model(input=model.input,
-                                 output=model.get_layer(layer_name).output)
+intermediate_layer_model = Model(inputs=model.input,
+                                 outputs=model.get_layer(layer_name).output)
 intermediate_output = intermediate_layer_model.predict(data)
 ```
 
@@ -222,7 +225,7 @@ layer_output = get_3rd_layer_output([X, 1])[0]
 
 You can do batch training using `model.train_on_batch(X, y)` and `model.test_on_batch(X, y)`. See the [models documentation](/models/sequential).
 
-Alternatively, you can write a generator that yields batches of training data and use the method `model.fit_generator(data_generator, samples_per_epoch, nb_epoch)`.
+Alternatively, you can write a generator that yields batches of training data and use the method `model.fit_generator(data_generator, steps_per_epoch, epochs)`.
 
 You can see batch training in action in our [CIFAR10 example](https://github.com/fchollet/keras/blob/master/examples/cifar10_cnn.py).
 
@@ -315,8 +318,9 @@ When using stateful RNNs, it is therefore assumed that:
 
 To use statefulness in RNNs, you need to:
 
-- explicitly specify the batch size you are using, by passing a `batch_input_shape` argument to the first layer in your model. It should be a tuple of integers, e.g. `(32, 10, 16)` for a 32-samples batch of sequences of 10 timesteps with 16 features per timestep.
+- explicitly specify the batch size you are using, by passing a `batch_size` argument to the first layer in your model. E.g. `batch_size=32` for a 32-samples batch of sequences of 10 timesteps with 16 features per timestep.
 - set `stateful=True` in your RNN layer(s).
+- specify `shuffle=False` when calling fit().
 
 To reset the states accumulated:
 
@@ -331,7 +335,7 @@ X  # this is our input data, of shape (32, 21, 16)
 # we will feed it to our model in sequences of length 10
 
 model = Sequential()
-model.add(LSTM(32, batch_input_shape=(32, 10, 16), stateful=True))
+model.add(LSTM(32, input_shape=(10, 16), batch_size=32, stateful=True))
 model.add(Dense(16, activation='softmax'))
 
 model.compile(optimizer='rmsprop', loss='categorical_crossentropy')
@@ -401,3 +405,18 @@ The VGG16 model is also the basis for several Keras example scripts:
 - [Style transfer](https://github.com/fchollet/keras/blob/master/examples/neural_style_transfer.py)
 - [Feature visualization](https://github.com/fchollet/keras/blob/master/examples/conv_filter_visualization.py)
 - [Deep dream](https://github.com/fchollet/keras/blob/master/examples/deep_dream.py)
+
+---
+
+### How can I use HDF5 inputs with Keras?
+
+You can use the `HDF5Matrix` class from `keras.utils.io_utils`. See [the documentation](/io_utils/#HDF5Matrix) for details.
+
+You can also directly use a HDF5 dataset:
+
+```python
+import h5py
+with h5py.File('input/file.hdf5', 'r') as f:
+    X_data = f['X_data']
+    model.predict(X_data)
+```
