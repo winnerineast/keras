@@ -430,6 +430,32 @@ def prod(x, axis=None, keepdims=False):
     return T.prod(x, axis=axis, keepdims=keepdims)
 
 
+def cumsum(x, axis=0):
+    """Cumulative sum of the values in a tensor, alongside the specified axis.
+
+    # Arguments
+        x: A tensor or variable.
+        axis: An integer, the axis to compute the sum.
+
+    # Returns
+        A tensor of the cumulative sum of values of `x` along `axis`.
+    """
+    return T.extra_ops.cumsum(x, axis=axis)
+
+
+def cumprod(x, axis=0):
+    """Cumulative product of the values in a tensor, alongside the specified axis.
+
+    # Arguments
+        x: A tensor or variable.
+        axis: An integer, the axis to compute the product.
+
+    # Returns
+        A tensor of the cumulative product of values of `x` along `axis`.
+    """
+    return T.extra_ops.cumprod(x, axis=axis)
+
+
 def mean(x, axis=None, keepdims=False):
     """Mean of a tensor, alongside the specified axis.
     """
@@ -712,6 +738,8 @@ def concatenate(tensors, axis=-1):
 def reshape(x, shape):
     y = T.reshape(x, shape)
     if _is_explicit_shape(shape):
+        if -1 in shape:
+            shape = tuple(x if x != -1 else None for x in shape)
         y._keras_shape = shape
         if hasattr(x, '_uses_learning_phase'):
             y._uses_learning_phase = x._uses_learning_phase
