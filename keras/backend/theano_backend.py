@@ -615,7 +615,7 @@ def batch_normalization(x, mean, var, beta, gamma, epsilon=1e-3):
 
     if mean.ndim == 1:
         # based on TensorFlow's default: normalize along rightmost dimension
-        reduction_axes = range(x.ndim - 1)
+        reduction_axes = list(range(x.ndim - 1))
     else:
         reduction_axes = [i for i in range(x.ndim) if mean.broadcastable[i]]
 
@@ -2127,7 +2127,7 @@ def ctc_batch_cost(y_true, y_pred, input_length, label_length):
 
 # HIGH ORDER FUNCTIONS
 
-def map_fn(fn, elems, name=None):
+def map_fn(fn, elems, name=None, dtype=None):
     """Map the function fn over the elements elems and return the outputs.
 
     # Arguments

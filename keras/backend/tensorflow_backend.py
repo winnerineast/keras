@@ -67,6 +67,7 @@ def clear_session():
     reset_uids()
     _SESSION = None
     phase = tf.placeholder(dtype='bool', name='keras_learning_phase')
+    _GRAPH_LEARNING_PHASES = {}
     _GRAPH_LEARNING_PHASES[tf.get_default_graph()] = phase
 
 
@@ -1478,7 +1479,7 @@ def normalize_batch_in_training(x, gamma, beta,
     """
     mean, var = tf.nn.moments(x, reduction_axes,
                               shift=None, name=None, keep_dims=False)
-    if sorted(reduction_axes) == range(ndim(x))[:-1]:
+    if sorted(reduction_axes) == list(range(ndim(x)))[:-1]:
         normed = tf.nn.batch_normalization(x, mean, var,
                                            beta, gamma,
                                            epsilon)
@@ -2266,9 +2267,9 @@ def rnn(step_function, inputs, initial_states,
                 states = return_states
                 successive_outputs.append(output)
                 successive_states.append(states)
-                last_output = successive_outputs[-1]
-                new_states = successive_states[-1]
-                outputs = tf.stack(successive_outputs)
+            last_output = successive_outputs[-1]
+            new_states = successive_states[-1]
+            outputs = tf.stack(successive_outputs)
         else:
             for inp in input_list:
                 output, states = step_function(inp, states + constants)
@@ -3341,7 +3342,7 @@ def ctc_decode(y_pred, input_length, greedy=True, beam_width=100,
 
 # HIGH ORDER FUNCTIONS
 
-def map_fn(fn, elems, name=None):
+def map_fn(fn, elems, name=None, dtype=None):
     """Map the function fn over the elements elems and return the outputs.
 
     # Arguments
@@ -3353,7 +3354,7 @@ def map_fn(fn, elems, name=None):
         Tensor with first dimension equal to the elems and second depending on
         fn
     """
-    return tf.map_fn(fn, elems, name=name)
+    return tf.map_fn(fn, elems, name=name, dtype=dtype)
 
 
 def foldl(fn, elems, initializer=None, name=None):
