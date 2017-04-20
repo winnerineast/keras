@@ -78,12 +78,16 @@ class Recurrent(Layer):
         # now model.output_shape == (None, 32)
         # note: `None` is the batch dimension.
 
-        # the following is identical:
-        model = Sequential()
-        model.add(LSTM(32, input_dim=64, input_length=10))
-
-        # for subsequent layers, not need to specify the input size:
+        # for subsequent layers, no need to specify the input size:
         model.add(LSTM(16))
+
+        # to stack recurrent layers, you must use return_sequences=True
+        # on any recurrent layer that feeds into another recurrent layer.
+        # note that you only need to specify the input size on the first layer.
+        model = Sequential()
+        model.add(LSTM(64, input_dim=64, input_length=10, return_sequences=True))
+        model.add(LSTM(32, return_sequences=True))
+        model.add(LSTM(10))
     ```
 
     # Arguments
@@ -93,7 +97,8 @@ class Recurrent(Layer):
         return_sequences: Boolean. Whether to return the last output
             in the output sequence, or the full sequence.
         go_backwards: Boolean (default False).
-            If True, process the input sequence backwards.
+            If True, process the input sequence backwards and return the
+            reversed sequence.
         stateful: Boolean (default False). If True, the last state
             for each sample at index i in a batch will be used as initial
             state for the sample of index i in the following batch.
@@ -466,19 +471,19 @@ class SimpleRNN(Recurrent):
         if self.stateful:
             self.reset_states()
 
-        self.kernel = self.add_weight((self.input_dim, self.units),
+        self.kernel = self.add_weight(shape=(self.input_dim, self.units),
                                       name='kernel',
                                       initializer=self.kernel_initializer,
                                       regularizer=self.kernel_regularizer,
                                       constraint=self.kernel_constraint)
         self.recurrent_kernel = self.add_weight(
-            (self.units, self.units),
+            shape=(self.units, self.units),
             name='recurrent_kernel',
             initializer=self.recurrent_initializer,
             regularizer=self.recurrent_regularizer,
             constraint=self.recurrent_constraint)
         if self.use_bias:
-            self.bias = self.add_weight((self.units,),
+            self.bias = self.add_weight(shape=(self.units,),
                                         name='bias',
                                         initializer=self.bias_initializer,
                                         regularizer=self.bias_regularizer,
@@ -528,7 +533,7 @@ class SimpleRNN(Recurrent):
 
     def get_constants(self, inputs, training=None):
         constants = []
-        if self.implementation == 0 and 0 < self.dropout < 1:
+        if self.implementation != 0 and 0 < self.dropout < 1:
             input_shape = K.int_shape(inputs)
             input_dim = input_shape[-1]
             ones = K.ones_like(K.reshape(inputs[:, 0, 0], (-1, 1)))
@@ -685,22 +690,22 @@ class GRU(Recurrent):
         if self.stateful:
             self.reset_states()
 
-        self.kernel = self.add_weight((self.input_dim, self.units * 3),
+        self.kernel = self.add_weight(shape=(self.input_dim, self.units * 3),
                                       name='kernel',
                                       initializer=self.kernel_initializer,
                                       regularizer=self.kernel_regularizer,
                                       constraint=self.kernel_constraint)
         self.recurrent_kernel = self.add_weight(
-            (self.units, self.units * 3),
+            shape=(self.units, self.units * 3),
             name='recurrent_kernel',
             initializer=self.recurrent_initializer,
             regularizer=self.recurrent_regularizer,
             constraint=self.recurrent_constraint)
 
         if self.use_bias:
-            self.bias = self.add_weight((self.units * 3,),
+            self.bias = self.add_weight(shape=(self.units * 3,),
                                         name='bias',
-                                        initializer='zero',
+                                        initializer=self.bias_initializer,
                                         regularizer=self.bias_regularizer,
                                         constraint=self.bias_constraint)
         else:
@@ -746,7 +751,7 @@ class GRU(Recurrent):
 
     def get_constants(self, inputs, training=None):
         constants = []
-        if self.implementation == 0 and 0 < self.dropout < 1:
+        if self.implementation != 0 and 0 < self.dropout < 1:
             input_shape = K.int_shape(inputs)
             input_dim = input_shape[-1]
             ones = K.ones_like(K.reshape(inputs[:, 0, 0], (-1, 1)))
@@ -965,28 +970,33 @@ class LSTM(Recurrent):
         if self.stateful:
             self.reset_states()
 
-        self.kernel = self.add_weight((self.input_dim, self.units * 4),
+        self.kernel = self.add_weight(shape=(self.input_dim, self.units * 4),
                                       name='kernel',
                                       initializer=self.kernel_initializer,
                                       regularizer=self.kernel_regularizer,
                                       constraint=self.kernel_constraint)
         self.recurrent_kernel = self.add_weight(
-            (self.units, self.units * 4),
+            shape=(self.units, self.units * 4),
             name='recurrent_kernel',
             initializer=self.recurrent_initializer,
             regularizer=self.recurrent_regularizer,
             constraint=self.recurrent_constraint)
 
         if self.use_bias:
-            self.bias = self.add_weight((self.units * 4,),
+            if self.unit_forget_bias:
+                def bias_initializer(shape, *args, **kwargs):
+                    return K.concatenate([
+                        self.bias_initializer((self.units,), *args, **kwargs),
+                        initializers.Ones()((self.units,), *args, **kwargs),
+                        self.bias_initializer((self.units * 2,), *args, **kwargs),
+                    ])
+            else:
+                bias_initializer = self.bias_initializer
+            self.bias = self.add_weight(shape=(self.units * 4,),
                                         name='bias',
-                                        initializer=self.bias_initializer,
+                                        initializer=bias_initializer,
                                         regularizer=self.bias_regularizer,
                                         constraint=self.bias_constraint)
-            if self.unit_forget_bias:
-                bias_value = np.zeros((self.units * 4,))
-                bias_value[self.units: self.units * 2] = 1.
-                K.set_value(self.bias, bias_value)
         else:
             self.bias = None
 
@@ -1036,7 +1046,7 @@ class LSTM(Recurrent):
 
     def get_constants(self, inputs, training=None):
         constants = []
-        if self.implementation == 0 and 0 < self.dropout < 1:
+        if self.implementation != 0 and 0 < self.dropout < 1:
             input_shape = K.int_shape(inputs)
             input_dim = input_shape[-1]
             ones = K.ones_like(K.reshape(inputs[:, 0, 0], (-1, 1)))

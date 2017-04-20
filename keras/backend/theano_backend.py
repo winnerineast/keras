@@ -1,6 +1,7 @@
 from collections import defaultdict
 from contextlib import contextmanager
 import theano
+from theano import ifelse
 from theano import tensor as T
 from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
 from theano.tensor.signal import pool
@@ -256,6 +257,18 @@ def ones_like(x, dtype=None, name=None):
 
 def zeros_like(x, dtype=None, name=None):
     return T.zeros_like(x, dtype=dtype)
+
+
+def identity(x):
+    """Returns a tensor with the same content as the input tensor.
+
+    # Arguments
+        x: The input tensor.
+
+    # Returns
+        A tensor of the same shape, type and content.
+    """
+    return x.copy()
 
 
 def random_uniform_variable(shape, low, high, dtype=None, name=None):
@@ -1166,8 +1179,8 @@ def rnn(step_function, inputs, initial_states,
         initial_states: tensor with shape (samples, ...) (no time dimension),
             containing the initial values for the states used in
             the step function.
-        go_backwards: boolean. If True, do the iteration over
-            the time dimension in reverse order.
+        go_backwards: boolean. If True, do the iteration over the time
+            dimension in reverse order and return the reversed sequence.
         mask: binary tensor with shape (samples, time),
             with a zero for every element that is masked.
         constants: a list of constant values passed at each step.
@@ -1494,20 +1507,35 @@ def l2_normalize(x, axis):
 
 
 def in_top_k(predictions, targets, k):
-    """Returns whether the `targets` are in the top `k` `predictions`
+    """Returns whether the `targets` are in the top `k` `predictions`.
 
     # Arguments
-        predictions: A tensor of shape batch_size x classess and type float32.
-        targets: A tensor of shape batch_size and type int32 or int64.
-        k: An int, number of top elements to consider.
+        predictions: A tensor of shape `(batch_size, classes)` and type `float32`.
+        targets: A 1D tensor of length `batch_size` and type `int32` or `int64`.
+        k: An `int`, number of top elements to consider.
 
     # Returns
-        A tensor of shape batch_size and type int. output_i is 1 if
-        targets_i is within top-k values of predictions_i
+        A 1D tensor of length `batch_size` and type `bool`.
+        `output[i]` is `True` if `predictions[i, targets[i]]` is within top-`k`
+        values of `predictions[i]`.
     """
-    predictions_top_k = T.argsort(predictions)[:, -k:]
-    result, _ = theano.map(lambda prediction, target: any(equal(prediction, target)), sequences=[predictions_top_k, targets])
-    return result
+    # handle k < 1 and k >= predictions.shape[1] cases to match TF behavior
+    if k < 1:
+        # dtype='bool' is only available since Theano 0.9.0
+        try:
+            return T.zeros_like(targets, dtype='bool')
+        except TypeError:
+            return T.zeros_like(targets, dtype='int8')
+
+    if k >= int_shape(predictions)[1]:
+        try:
+            return T.ones_like(targets, dtype='bool')
+        except TypeError:
+            return T.ones_like(targets, dtype='int8')
+
+    predictions_k = T.sort(predictions)[:, -k]
+    targets_values = predictions[T.arange(targets.shape[0]), targets]
+    return T.ge(targets_values, predictions_k)
 
 
 # CONVOLUTIONS
