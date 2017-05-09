@@ -1142,7 +1142,7 @@ def print_tensor(x, message=''):
 
 class Function(object):
 
-    def __init__(self, inputs, outputs, updates=[], **kwargs):
+    def __init__(self, inputs, outputs, updates=[], name=None, **kwargs):
         unique_variables_to_update = {}
         for v, nv in updates:
             if v not in unique_variables_to_update:
@@ -1151,7 +1151,9 @@ class Function(object):
         self.function = theano.function(inputs, outputs, updates=updates,
                                         allow_input_downcast=True,
                                         on_unused_input='ignore',
+                                        name=name,
                                         **kwargs)
+        self.name = name
 
     def __call__(self, inputs):
         assert isinstance(inputs, (list, tuple))
@@ -1524,8 +1526,9 @@ def dropout(x, level, noise_shape=None, seed=None):
     return x
 
 
-def l2_normalize(x, axis):
-    norm = T.sqrt(T.sum(T.square(x), axis=axis, keepdims=True))
+def l2_normalize(x, axis, epsilon=1e-12):
+    square_sum = T.sum(T.square(x), axis=axis, keepdims=True)
+    norm = T.sqrt(T.maximum(square_sum, epsilon))
     return x / norm
 
 

@@ -3,6 +3,7 @@ from __future__ import print_function
 
 import os
 import csv
+import six
 
 import numpy as np
 import time
@@ -581,15 +582,18 @@ class TensorBoard(Callback):
 
     # Arguments
         log_dir: the path of the directory where to save the log
-            files to be parsed by Tensorboard.
+            files to be parsed by TensorBoard.
         histogram_freq: frequency (in epochs) at which to compute activation
-            histograms for the layers of the model. If set to 0,
-            histograms won't be computed.
-        write_graph: whether to visualize the graph in Tensorboard.
+            and weight histograms for the layers of the model. If set to 0,
+            histograms won't be computed. Validation data (or split) must be
+            specified for histogram visualizations.
+        write_graph: whether to visualize the graph in TensorBoard.
             The log file can become quite large when
             write_graph is set to True.
+        write_grads: whether to visualize gradient histograms in TensorBoard.
+            `histogram_freq` must be greater than 0.
         write_images: whether to write model weights to visualize as
-            image in Tensorboard.
+            image in TensorBoard.
         embeddings_freq: frequency (in epochs) at which selected embedding
             layers will be saved.
         embeddings_layer_names: a list of names of layers to keep eye on. If
@@ -604,6 +608,7 @@ class TensorBoard(Callback):
     def __init__(self, log_dir='./logs',
                  histogram_freq=0,
                  write_graph=True,
+                 write_grads=False,
                  write_images=False,
                  embeddings_freq=0,
                  embeddings_layer_names=None,
@@ -616,6 +621,7 @@ class TensorBoard(Callback):
         self.histogram_freq = histogram_freq
         self.merged = None
         self.write_graph = write_graph
+        self.write_grads = write_grads
         self.write_images = write_images
         self.embeddings_freq = embeddings_freq
         self.embeddings_layer_names = embeddings_layer_names
@@ -629,14 +635,42 @@ class TensorBoard(Callback):
 
                 for weight in layer.weights:
                     tf.summary.histogram(weight.name, weight)
+                    if self.write_grads:
+                        grads = model.optimizer.get_gradients(model.total_loss,
+                                                              weight)
+                        tf.summary.histogram('{}_grad'.format(weight.name), grads)
                     if self.write_images:
                         w_img = tf.squeeze(weight)
-                        shape = w_img.get_shape()
-                        if len(shape) > 1 and shape[0] > shape[1]:
-                            w_img = tf.transpose(w_img)
-                        if len(shape) == 1:
-                            w_img = tf.expand_dims(w_img, 0)
-                        w_img = tf.expand_dims(tf.expand_dims(w_img, 0), -1)
+                        shape = K.int_shape(w_img)
+                        if len(shape) == 2:  # dense layer kernel case
+                            if shape[0] > shape[1]:
+                                w_img = tf.transpose(w_img)
+                                shape = K.int_shape(w_img)
+                            w_img = tf.reshape(w_img, [1,
+                                                       shape[0],
+                                                       shape[1],
+                                                       1])
+                        elif len(shape) == 3:  # convnet case
+                            if K.image_data_format() == 'channels_last':
+                                # switch to channels_first to display
+                                # every kernel as a separate image
+                                w_img = tf.transpose(w_img, perm=[2, 0, 1])
+                                shape = K.int_shape(w_img)
+                            w_img = tf.reshape(w_img, [shape[0],
+                                                       shape[1],
+                                                       shape[2],
+                                                       1])
+                        elif len(shape) == 1:  # bias case
+                            w_img = tf.reshape(w_img, [1,
+                                                       shape[0],
+                                                       1,
+                                                       1])
+                        else:
+                            # not possible to handle 3D convnets etc.
+                            continue
+
+                        shape = K.int_shape(w_img)
+                        assert len(shape) == 4 and shape[-1] in [1, 3, 4]
                         tf.summary.image(weight.name, w_img)
 
                 if hasattr(layer, 'output'):
@@ -693,13 +727,16 @@ class TensorBoard(Callback):
             if epoch % self.histogram_freq == 0:
                 # TODO: implement batched calls to sess.run
                 # (current call will likely go OOM on GPU)
+
+                val_data = self.validation_data
+                tensors = (self.model.inputs +
+                           self.model.targets +
+                           self.model.sample_weights)
+
                 if self.model.uses_learning_phase:
-                    cut_v_data = len(self.model.inputs)
-                    val_data = self.validation_data[:cut_v_data] + [0]
-                    tensors = self.model.inputs + [K.learning_phase()]
-                else:
-                    val_data = self.validation_data
-                    tensors = self.model.inputs
+                    tensors += [K.learning_phase()]
+
+                assert len(val_data) == len(tensors)
                 feed_dict = dict(zip(tensors, val_data))
                 result = self.sess.run([self.merged], feed_dict=feed_dict)
                 summary_str = result[0]
@@ -861,23 +898,26 @@ class CSVLogger(Callback):
         self.writer = None
         self.keys = None
         self.append_header = True
+        self.file_flags = 'b' if six.PY2 and os.name == 'nt' else ''
         super(CSVLogger, self).__init__()
 
     def on_train_begin(self, logs=None):
         if self.append:
             if os.path.exists(self.filename):
-                with open(self.filename) as f:
+                with open(self.filename, 'r' + self.file_flags) as f:
                     self.append_header = not bool(len(f.readline()))
-            self.csv_file = open(self.filename, 'a')
+            self.csv_file = open(self.filename, 'a' + self.file_flags)
         else:
-            self.csv_file = open(self.filename, 'w')
+            self.csv_file = open(self.filename, 'w' + self.file_flags)
 
     def on_epoch_end(self, epoch, logs=None):
         logs = logs or {}
 
         def handle_value(k):
             is_zero_dim_ndarray = isinstance(k, np.ndarray) and k.ndim == 0
-            if isinstance(k, Iterable) and not is_zero_dim_ndarray:
+            if isinstance(k, six.string_types):
+                return k
+            elif isinstance(k, Iterable) and not is_zero_dim_ndarray:
                 return '"[%s]"' % (', '.join(map(str, k)))
             else:
                 return k
