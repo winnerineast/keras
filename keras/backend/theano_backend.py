@@ -14,9 +14,10 @@ try:
     from theano.tensor.nnet.nnet import softsign as T_softsign
 except ImportError:
     from theano.sandbox.softsign import softsign as T_softsign
-import inspect
+
 import numpy as np
 from .common import _FLOATX, floatx, _EPSILON, image_data_format
+from ..utils.generic_utils import has_arg
 # Legacy functions
 from .common import set_image_dim_ordering, image_dim_ordering
 
@@ -162,6 +163,42 @@ def constant(value, dtype=None, shape=None, name=None):
     const._keras_shape = shape
     const._uses_learning_phase = False
     return const
+
+
+def is_keras_tensor(x):
+    """Returns whether `x` is a Keras tensor.
+
+    # Arguments
+        x: a potential tensor.
+
+    # Returns
+        A boolean: whether the argument is a Keras tensor.
+
+    # Raises
+        ValueError: in case `x` is not a symbolic tensor.
+
+    # Examples
+    ```python
+        >>> from keras import backend as K
+        >>> np_var = numpy.array([1, 2])
+        >>> K.is_keras_tensor(np_var) # A numpy array is not a symbolic tensor.
+        ValueError
+        >>> k_var = theano.shared(value=np.array([1,2,3]))
+        >>> K.is_keras_tensor(k_var) # A variable created directly from tensorflow/theano is not a Keras tensor.
+        False
+        >>> keras_var = K.variable(np_var)
+        >>> K.is_keras_tensor(keras_var) # A variable created with the keras backend is a Keras tensor.
+        True
+        >>> keras_placeholder = K.placeholder(shape=(2, 4, 5))
+        >>> K.is_keras_tensor(keras_placeholder)  # A placeholder is a Keras tensor.
+        True
+    ```
+    """
+    if not isinstance(x, (T.TensorVariable,
+                          T.sharedvar.TensorSharedVariable)):
+        raise ValueError('Unexpectedly found an instance of type `' + str(type(x)) + '`. '
+                         'Expected a symbolic tensor instance.')
+    return hasattr(x, '_keras_history')
 
 
 def placeholder(shape=None, ndim=None, dtype=None, sparse=False, name=None):
@@ -409,10 +446,14 @@ def transpose(x):
 
 
 def gather(reference, indices):
-    """reference: a tensor.
-    indices: an int tensor of indices.
+    """Retrieves the elements of indices `indices` in the tensor `reference`.
 
-    Return: a tensor of same type as reference.
+    # Arguments
+        reference: A tensor.
+        indices: An integer tensor of indices.
+
+    # Returns
+        A tensor of same type as `reference`.
     """
     y = reference[indices]
     if hasattr(reference, '_keras_shape') and hasattr(indices, '_keras_shape'):
@@ -893,7 +934,7 @@ def tile(x, n):
                     output_shape += (None,)
                 else:
                     output_shape += (i * j,)
-        elif type(n) is int:
+        elif isinstance(n, int):
             output_shape = x._keras_shape[:-1]
             if x._keras_shape[-1] is None:
                 output_shape += (None,)
@@ -1015,7 +1056,7 @@ def spatial_2d_padding(x, padding=((1, 1), (1, 1)), data_format=None):
                    slice(top_pad, input_shape[2] + top_pad),
                    slice(left_pad, input_shape[3] + left_pad))
 
-    elif data_format == 'channels_last':
+    else:
         output_shape = (input_shape[0],
                         input_shape[1] + top_pad + bottom_pad,
                         input_shape[2] + left_pad + right_pad,
@@ -1025,8 +1066,6 @@ def spatial_2d_padding(x, padding=((1, 1), (1, 1)), data_format=None):
                    slice(top_pad, input_shape[1] + top_pad),
                    slice(left_pad, input_shape[2] + left_pad),
                    slice(None))
-    else:
-        raise ValueError('Invalid data_format:', data_format)
     y = T.set_subtensor(output[indices], x)
     y._keras_shape = output_shape
     return y
@@ -1055,7 +1094,7 @@ def spatial_3d_padding(x, padding=((1, 1), (1, 1), (1, 1)), data_format=None):
                    slice(padding[1][0], input_shape[3] + padding[1][0]),
                    slice(padding[2][0], input_shape[4] + padding[2][0]))
 
-    elif data_format == 'channels_last':
+    else:
         output_shape = (input_shape[0],
                         input_shape[1] + padding[0][0] + padding[0][1],
                         input_shape[2] + padding[1][0] + padding[1][1],
@@ -1067,8 +1106,6 @@ def spatial_3d_padding(x, padding=((1, 1), (1, 1), (1, 1)), data_format=None):
                    slice(padding[1][0], input_shape[2] + padding[1][0]),
                    slice(padding[2][0], input_shape[3] + padding[2][0]),
                    slice(None))
-    else:
-        raise ValueError('Invalid data_format:', data_format)
     return T.set_subtensor(output[indices], x)
 
 
@@ -1105,8 +1142,8 @@ def pattern_broadcast(x, broatcastable):
 
 def get_value(x):
     if not hasattr(x, 'get_value'):
-        raise TypeError('get_value() can only be called on a variable. '
-                        'If you have an expression instead, use eval().')
+        raise TypeError('`get_value` can only be called on a variable. '
+                        'If you have an expression instead, use `eval()`.')
     return x.get_value()
 
 
@@ -1162,10 +1199,9 @@ class Function(object):
 
 def function(inputs, outputs, updates=[], **kwargs):
     if len(kwargs) > 0:
-        function_args = inspect.getargspec(theano.function)[0]
         for key in kwargs.keys():
-            if key not in function_args:
-                msg = 'Invalid argument "%s" passed to K.function' % key
+            if not has_arg(theano.function, key, True):
+                msg = 'Invalid argument "%s" passed to K.function with Theano backend' % key
                 raise ValueError(msg)
     return Function(inputs, outputs, updates=updates, **kwargs)
 
@@ -1354,7 +1390,18 @@ def rnn(step_function, inputs, initial_states,
 
 
 def switch(condition, then_expression, else_expression):
-    """condition: scalar tensor.
+    """Switches between two operations depending on a scalar value.
+
+    Note that both `then_expression` and `else_expression`
+    should be symbolic tensors of the *same shape*.
+
+    # Arguments
+        condition: scalar tensor (`int` or `bool`).
+        then_expression: either a tensor, or a callable that returns a tensor.
+        else_expression: either a tensor, or a callable that returns a tensor.
+
+    # Returns
+        The selected tensor.
     """
     if callable(then_expression):
         then_expression = then_expression()
@@ -1778,7 +1825,7 @@ def conv2d(x, kernel, strides=(1, 1), padding='valid',
         padding: string, "same" or "valid".
         data_format: "channels_last" or "channels_first".
             Whether to use Theano or TensorFlow data format
-        in inputs/kernels/ouputs.
+        in inputs/kernels/outputs.
     """
     if data_format is None:
         data_format = image_data_format()
@@ -1822,7 +1869,10 @@ def conv2d_transpose(x, kernel, output_shape, strides=(1, 1),
         padding: string, "same" or "valid".
         data_format: "channels_last" or "channels_first".
             Whether to use Theano or TensorFlow data format
-        in inputs/kernels/ouputs.
+        in inputs/kernels/outputs.
+
+    # Raises
+        ValueError: if using an even kernel size with padding 'same'.
     """
     flip_filters = False
     if data_format is None:
@@ -1841,6 +1891,12 @@ def conv2d_transpose(x, kernel, output_shape, strides=(1, 1),
     else:
         # Will only work if `kernel` is a shared variable.
         kernel_shape = kernel.eval().shape
+
+    if padding == 'same' and kernel_shape[0] % 2 == 0:
+        raise ValueError('In `Conv2DTranspose`, with padding mode `same`, '
+                         'even kernel sizes are only supported with Tensorflow. '
+                         'With Theano, set `kernel_size` to an odd number.')
+
     kernel_shape = _preprocess_conv2d_filter_shape(kernel_shape, data_format)
 
     x = _preprocess_conv2d_input(x, data_format)
@@ -1874,7 +1930,7 @@ def conv3d(x, kernel, strides=(1, 1, 1),
         padding: string, "same" or "valid".
         data_format: "channels_last" or "channels_first".
             Whether to use Theano or TensorFlow data format
-        in inputs/kernels/ouputs.
+        in inputs/kernels/outputs.
     """
     if data_format is None:
         data_format = image_data_format()
@@ -1925,9 +1981,6 @@ def pool2d(x, pool_size, strides=(1, 1), padding='valid',
     else:
         raise ValueError('Invalid border mode:', padding)
 
-    if data_format not in {'channels_first', 'channels_last'}:
-        raise ValueError('Unknown data_format:', data_format)
-
     if data_format == 'channels_last':
         x = x.dimshuffle((0, 3, 1, 2))
 
@@ -1975,8 +2028,6 @@ def pool3d(x, pool_size, strides=(1, 1, 1), padding='valid',
         padding = (0, 0, 0)
     else:
         raise ValueError('Invalid padding:', padding)
-    if data_format not in {'channels_first', 'channels_last'}:
-        raise ValueError('Unknown data_format:', data_format)
 
     if data_format == 'channels_last':
         x = x.dimshuffle((0, 4, 1, 2, 3))
@@ -2014,21 +2065,44 @@ def bias_add(x, bias, data_format=None):
         data_format = image_data_format()
     if data_format not in {'channels_first', 'channels_last'}:
         raise ValueError('Unknown data_format ' + str(data_format))
+    if ndim(bias) != 1 and ndim(bias) != ndim(x) - 1:
+        raise ValueError('Unexpected bias dimensions %d, '
+                         'expect to be 1 or %d dimensions'
+                         % (ndim(bias), ndim(x) - 1))
+    bias_shape = tuple(bias.shape)
     if ndim(x) == 5:
         if data_format == 'channels_first':
-            x += reshape(bias, (1, bias.shape[0], 1, 1, 1))
+            if ndim(bias) == 1:
+                x += reshape(bias, (1, bias_shape[0], 1, 1, 1))
+            else:
+                x += reshape(bias, (1, bias_shape[3]) + bias_shape[:3])
         elif data_format == 'channels_last':
-            x += reshape(bias, (1, 1, 1, 1, bias.shape[0]))
+            if ndim(bias) == 1:
+                x += reshape(bias, (1, 1, 1, 1, bias_shape[0]))
+            else:
+                x += reshape(bias, (1,) + bias_shape)
     elif ndim(x) == 4:
         if data_format == 'channels_first':
-            x += reshape(bias, (1, bias.shape[0], 1, 1))
+            if ndim(bias) == 1:
+                x += reshape(bias, (1, bias_shape[0], 1, 1))
+            else:
+                x += reshape(bias, (1, bias_shape[2]) + bias_shape[:2])
         elif data_format == 'channels_last':
-            x += reshape(bias, (1, 1, 1, bias.shape[0]))
+            if ndim(bias) == 1:
+                x += reshape(bias, (1, 1, 1, bias_shape[0]))
+            else:
+                x += reshape(bias, (1,) + bias_shape)
     elif ndim(x) == 3:
         if data_format == 'channels_first':
-            x += reshape(bias, (1, bias.shape[0], 1))
+            if ndim(bias) == 1:
+                x += reshape(bias, (1, bias_shape[0], 1))
+            else:
+                x += reshape(bias, (1, bias_shape[1], bias_shape[0]))
         elif data_format == 'channels_last':
-            x += reshape(bias, (1, 1, bias.shape[0]))
+            if ndim(bias) == 1:
+                x += reshape(bias, (1, 1, bias_shape[0]))
+            else:
+                x += reshape(bias, (1,) + bias_shape)
     else:
         x += bias
     return x
@@ -2246,3 +2320,72 @@ def foldr(fn, elems, initializer=None, name=None):
     fn2 = lambda x, acc: fn(acc, x)
 
     return theano.foldr(fn2, elems, initializer, name=name)[0]
+
+
+def local_conv1d(inputs, kernel, kernel_size, strides, data_format=None):
+    if data_format is None:
+        data_format = image_data_format()
+    if data_format not in {'channels_first', 'channels_last'}:
+        raise ValueError('Unknown data_format ' + str(data_format))
+
+    stride = strides[0]
+    kernel_shape = int_shape(kernel)
+    output_length, feature_dim, filters = kernel_shape
+
+    xs = []
+    for i in range(output_length):
+        slice_length = slice(i * stride,
+                             i * stride + kernel_size[0])
+        xs.append(reshape(inputs[:, slice_length, :],
+                          (1, -1, feature_dim)))
+    x_aggregate = concatenate(xs, axis=0)
+    # Shape: `(output_length, batch_size, filters)`.
+    output = batch_dot(x_aggregate, kernel)
+    return permute_dimensions(output, (1, 0, 2))
+
+
+def local_conv2d(inputs, kernel, kernel_size, strides, output_shape, data_format=None):
+    if data_format is None:
+        data_format = image_data_format()
+    if data_format not in {'channels_first', 'channels_last'}:
+        raise ValueError('Unknown data_format ' + str(data_format))
+
+    stride_row, stride_col = strides
+    output_row, output_col = output_shape
+    kernel_shape = int_shape(kernel)
+    _, feature_dim, filters = kernel_shape
+
+    if data_format == 'channels_first':
+        output = []
+        for i in range(output_row):
+            for j in range(output_col):
+                slice_row = slice(i * stride_row,
+                                  i * stride_row + kernel_size[0])
+                slice_col = slice(j * stride_col,
+                                  j * stride_col + kernel_size[1])
+                x_flatten = reshape(inputs[:, :, slice_row, slice_col],
+                                    (1, -1, feature_dim))
+                output.append(dot(x_flatten,
+                                  kernel[i * output_col + j, :, :]))
+        output = concatenate(output, axis=0)
+        output = reshape(output,
+                         (output_row, output_col, -1, filters))
+        output = permute_dimensions(output, (2, 3, 0, 1))
+    else:
+        xs = []
+        for i in range(output_row):
+            for j in range(output_col):
+                slice_row = slice(i * stride_row,
+                                  i * stride_row + kernel_size[0])
+                slice_col = slice(j * stride_col,
+                                  j * stride_col + kernel_size[1])
+                xs.append(reshape(inputs[:, slice_row, slice_col, :],
+                                  (1, -1, feature_dim)))
+
+        x_aggregate = concatenate(xs, axis=0)
+        output = batch_dot(x_aggregate, kernel)
+        output = reshape(output,
+                         (output_row, output_col, -1, filters))
+        output = permute_dimensions(output, (2, 0, 1, 3))
+
+    return output

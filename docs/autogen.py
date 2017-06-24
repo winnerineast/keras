@@ -320,9 +320,11 @@ def get_classes_ancestors(classes):
 
 
 def get_function_signature(function, method=True):
-    signature = getattr(function, '_legacy_support_signature', None)
-    if signature is None:
+    wrapped = getattr(function, '_original_function', None)
+    if wrapped is None:
         signature = inspect.getargspec(function)
+    else:
+        signature = inspect.getargspec(wrapped)
     defaults = signature.defaults
     if method:
         args = signature.args[1:]
@@ -387,7 +389,7 @@ def process_class_docstring(docstring):
                        r'\n    __\1__\n\n',
                        docstring)
 
-    docstring = re.sub(r'    ([^\s\\]+):(.*)\n',
+    docstring = re.sub(r'    ([^\s\\\(]+):(.*)\n',
                        r'    - __\1__:\2\n',
                        docstring)
 
@@ -405,7 +407,7 @@ def process_function_docstring(docstring):
                        r'\n        __\1__\n\n',
                        docstring)
 
-    docstring = re.sub(r'    ([^\s\\]+):(.*)\n',
+    docstring = re.sub(r'    ([^\s\\\(]+):(.*)\n',
                        r'    - __\1__:\2\n',
                        docstring)
 
