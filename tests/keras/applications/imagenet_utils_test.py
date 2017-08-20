@@ -6,12 +6,23 @@ from keras.applications import imagenet_utils as utils
 
 
 def test_preprocess_input():
-    x = np.random.uniform(0, 255, (2, 3, 2, 3))
+    # Test image batch
+    x = np.random.uniform(0, 255, (2, 10, 10, 3))
     assert utils.preprocess_input(x).shape == x.shape
 
     out1 = utils.preprocess_input(x, 'channels_last')
-    out2 = utils.preprocess_input(np.transpose(x, (0, 3, 1, 2)), 'channels_first')
+    out2 = utils.preprocess_input(np.transpose(x, (0, 3, 1, 2)),
+                                  'channels_first')
     assert_allclose(out1, out2.transpose(0, 2, 3, 1))
+
+    # Test single image
+    x = np.random.uniform(0, 255, (10, 10, 3))
+    assert utils.preprocess_input(x).shape == x.shape
+
+    out1 = utils.preprocess_input(x, 'channels_last')
+    out2 = utils.preprocess_input(np.transpose(x, (2, 0, 1)),
+                                  'channels_first')
+    assert_allclose(out1, out2.transpose(1, 2, 0))
 
 
 def test_decode_predictions():
@@ -39,6 +50,19 @@ def test_obtain_input_shape():
 
     # Test invalid use cases
     for data_format in ['channels_last', 'channels_first']:
+
+        # test warning
+        shape = (139, 139)
+        input_shape = shape + (99,) if data_format == 'channels_last' else (99,) + shape
+        with pytest.warns(UserWarning):
+            utils._obtain_input_shape(
+                input_shape=input_shape,
+                default_size=None,
+                min_size=139,
+                data_format=data_format,
+                include_top=False,
+                weights='fake_weights')
+
         # input_shape is smaller than min_size.
         shape = (100, 100)
         input_shape = shape + (3,) if data_format == 'channels_last' else (3,) + shape
@@ -71,6 +95,14 @@ def test_obtain_input_shape():
                 min_size=139,
                 data_format=data_format,
                 include_top=False)
+
+    # test include top
+    assert utils._obtain_input_shape(
+        input_shape=None,
+        default_size=None,
+        min_size=139,
+        data_format='channels_first',
+        include_top=True,) == (3, None, None)
 
     assert utils._obtain_input_shape(
         input_shape=None,
