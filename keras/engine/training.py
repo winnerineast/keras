@@ -60,6 +60,9 @@ def _standardize_input_data(data, names, shapes=None,
     if data is None:
         return [None for _ in range(len(names))]
     if isinstance(data, dict):
+        for key, value in data.items():
+            if value.__class__.__name__ == 'DataFrame':
+                data[key] = value.values
         arrays = []
         for name in names:
             if name not in data:
@@ -68,6 +71,9 @@ def _standardize_input_data(data, names, shapes=None,
                                  str(names))
             arrays.append(data[name])
     elif isinstance(data, list):
+        for key, value in enumerate(data):
+            if value.__class__.__name__ == 'DataFrame':
+                data[key] = value.values
         if len(data) != len(names):
             if data and hasattr(data[0], 'shape'):
                 raise ValueError('Error when checking model ' +
@@ -95,6 +101,9 @@ def _standardize_input_data(data, names, shapes=None,
                         'The list you passed was: ' +
                         str(data)[:200])
         arrays = data
+    elif data.__class__.__name__ == 'DataFrame':
+        # test if data is a DataFrame, without pandas installed
+        data = data.values
     else:
         if not hasattr(data, 'shape'):
             raise TypeError('Error when checking model ' +
@@ -373,7 +382,7 @@ def _make_batches(size, batch_size):
     """
     num_batches = int(np.ceil(size / float(batch_size)))
     return [(i * batch_size, min(size, (i + 1) * batch_size))
-            for i in range(0, num_batches)]
+            for i in range(num_batches)]
 
 
 def _slice_arrays(arrays, start=None, stop=None):
@@ -622,9 +631,9 @@ class Model(Container):
         """
         loss = loss or {}
         self.optimizer = optimizers.get(optimizer)
-        self.sample_weight_mode = sample_weight_mode
         self.loss = loss
         self.loss_weights = loss_weights
+        self.sample_weight_mode = sample_weight_mode
 
         # Prepare loss functions.
         if isinstance(loss, dict):
@@ -1249,7 +1258,7 @@ class Model(Container):
                 for i, batch_out in enumerate(batch_outs):
                     unconcatenated_outs[i].append(batch_out)
                 if verbose == 1:
-                    progbar.update(step)
+                    progbar.update(step + 1)
             if len(unconcatenated_outs) == 1:
                 return np.concatenate(unconcatenated_outs[0], axis=0)
             return [np.concatenate(unconcatenated_outs[i], axis=0)
@@ -1304,9 +1313,12 @@ class Model(Container):
                                               steps,
                                               'steps')
         outs = []
-        if steps is not None:
-            if verbose == 1:
+        if verbose == 1:
+            if steps is not None:
                 progbar = Progbar(target=steps)
+            else:
+                progbar = Progbar(target=num_samples)
+        if steps is not None:
             for step in range(steps):
                 batch_outs = f(ins)
                 if isinstance(batch_outs, list):
@@ -1320,12 +1332,10 @@ class Model(Container):
                         outs.append(0.)
                     outs[0] += batch_outs
                 if verbose == 1:
-                    progbar.update(step)
+                    progbar.update(step + 1)
             for i in range(len(outs)):
                 outs[i] /= steps
         else:
-            if verbose == 1:
-                progbar = Progbar(target=num_samples)
             batches = _make_batches(num_samples, batch_size)
             index_array = np.arange(num_samples)
             for batch_index, (batch_start, batch_end) in enumerate(batches):
@@ -1869,7 +1879,7 @@ class Model(Container):
             steps_per_epoch: Total number of steps (batches of samples)
                 to yield from `generator` before declaring one epoch
                 finished and starting the next epoch. It should typically
-                be equal to the number of unique samples if your dataset
+                be equal to the number of unique samples of your dataset
                 divided by the batch size.
             epochs: Integer, total number of iterations on the data.
             verbose: Verbosity mode, 0, 1, or 2.
@@ -1893,9 +1903,9 @@ class Model(Container):
                 non picklable arguments to the generator
                 as they can't be passed
                 easily to children processes.
-            shuffle: Whether to shuffle the data at the beginning of each
-                epoch. Only used with instances of `Sequence` (
-                keras.utils.Sequence).
+            shuffle: Whether to shuffle the order of the batches at
+                the beginning of each epoch. Only used with instances
+                of `Sequence` (keras.utils.Sequence).
             initial_epoch: Epoch at which to start training
                 (useful for resuming a previous training run)
 

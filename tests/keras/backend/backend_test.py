@@ -3,6 +3,7 @@ from numpy.testing import assert_allclose
 import numpy as np
 import scipy.sparse as sparse
 import warnings
+from keras.utils.test_utils import keras_test
 
 from keras import backend as K
 from keras.backend import floatx, set_floatx, variable
@@ -22,7 +23,7 @@ try:
     BACKENDS.append(KTF)
 except ImportError:
     KTF = None
-    warnings.warn('Could not import the Tensorflow backend.')
+    warnings.warn('Could not import the TensorFlow backend.')
 
 try:
     from keras.backend import theano_backend as KTH
@@ -86,6 +87,7 @@ def assert_list_keras_shape(z_list):
             assert z._keras_shape == z.shape
 
 
+@keras_test
 def check_single_tensor_operation(function_name, x_shape_or_val, backend_list, **kwargs):
     shape_or_val = kwargs.pop('shape_or_val', True)
     assert_value_equality = kwargs.pop('assert_value_equality', True)
@@ -114,6 +116,7 @@ def check_single_tensor_operation(function_name, x_shape_or_val, backend_list, *
     assert_list_keras_shape(z_list)
 
 
+@keras_test
 def check_two_tensor_operation(function_name, x_shape_or_val,
                                y_shape_or_val, backend_list, **kwargs):
     shape_or_val = kwargs.pop('shape_or_val', True)
@@ -152,6 +155,7 @@ def check_two_tensor_operation(function_name, x_shape_or_val,
     assert_list_keras_shape(z_list)
 
 
+@keras_test
 def check_composed_tensor_operations(first_function_name, first_function_args,
                                      second_function_name, second_function_args,
                                      input_shape, backend_list):
@@ -216,11 +220,6 @@ class TestBackend(object):
         check_single_tensor_operation('random_normal_variable', (2, 3), BACKENDS,
                                       mean=0., scale=1.,
                                       shape_or_val=False, assert_value_equality=False)
-
-        # not supported dtype
-        for dtype in ['int16', 'int32', 'int64', 'uint8', 'uint16', 'double']:
-            with pytest.raises(ValueError):
-                ztf = KTF.random_normal_variable((2, 3), 0, 1, dtype=dtype)
 
     @pytest.mark.parametrize('k', [KTF], ids=['TensorFlow'])
     def test_batch_dot_shape(self, k):
@@ -649,14 +648,27 @@ class TestBackend(object):
                             rtol=1e-5)
 
     def test_switch(self):
+        # scalar
         val = np.random.random()
         z_list = []
         for k in BACKENDS:
             x = k.variable(val)
             x = k.switch(k.greater_equal(x, 0.5), x * 0.1, x * 0.2)
             z_list.append(k.eval(x))
-
         assert_list_pairwise(z_list)
+        # non scalar
+        shapes = []
+        shapes.append([(4, 3, 2), (4, 3, 2), (4, 3, 2)])
+        shapes.append([(4, 3,), (4, 3, 2), (4, 3, 2)])
+        shapes.append([(4,), (4, 3, 2), (4, 3, 2)])
+        for s in shapes:
+            z_list = []
+            arrays = list(map(np.random.random, s))
+            for k in BACKENDS:
+                x, then_expr, else_expr = map(k.variable, arrays)
+                cond = k.greater_equal(x, 0.5)
+                z_list.append(k.eval(k.switch(cond, then_expr, else_expr)))
+            assert_list_pairwise(z_list)
 
     def test_dropout(self):
         val = np.random.random((100, 100))
@@ -694,7 +706,7 @@ class TestBackend(object):
         # cross_entropy call require the label is a valid probability distribution,
         # otherwise it is garbage in garbage out...
         # due to the algo difference, we can't guarantee CNTK has the same result on the garbage input.
-        # so create a seperate test case for valid lable input
+        # so create a separate test case for valid label input
         check_two_tensor_operation('categorical_crossentropy', (4, 2), (4, 2), [KTH, KTF], from_logits=True)
         xval = np.asarray([[0.26157712, 0.0432167], [-0.43380741, 0.30559841],
                            [0.20225059, -0.38956559], [-0.13805378, 0.08506755]], dtype=np.float32)
@@ -717,7 +729,7 @@ class TestBackend(object):
         targets = np.random.randint(num_classes, size=batch_size, dtype='int32')
 
         # (k == 0 or k > num_classes) does not raise an error but just return an unmeaningful tensor.
-        for k in range(0, num_classes + 1):
+        for k in range(num_classes + 1):
             z_list = [b.eval(b.in_top_k(b.variable(predictions, dtype='float32'),
                                         b.variable(targets, dtype='int32'), k))
                       for b in [KTH, KTF]]
@@ -868,46 +880,6 @@ class TestBackend(object):
             assert np.max(rand) == 1
             assert np.min(rand) == 0
 
-    '''need special handle for different backend'''
-
-    def test_internal_conv_utils(self):
-        xshape = (5, 4, 3, 2)
-        xval = np.random.random(xshape)
-        xtf = KTF.variable(xval)
-        ztf = KTF._preprocess_deconv_output_shape(xtf, xshape, 'channels_first')
-        assert ztf == (5, 3, 2, 4)
-
-        for dtype in [None, 'float64']:
-            xval = np.random.random((5, 4, 3, 2))
-            xtf = KTF.variable(xval, dtype=dtype)
-            ztf = KTF.eval(KTF._preprocess_conv2d_input(xtf, 'channels_first'))
-            assert ztf.shape == (5, 3, 2, 4)
-
-            xval = np.random.random((6, 5, 4, 3, 2))
-            xtf = KTF.variable(xval, dtype=dtype)
-            ztf = KTF.eval(KTF._preprocess_conv3d_input(xtf, 'channels_first'))
-            assert ztf.shape == (6, 4, 3, 2, 5)
-
-            xval = np.random.random((5, 4, 3, 2))
-            xtf = KTF.variable(xval, dtype=dtype)
-            ztf = KTF.eval(KTF._preprocess_conv2d_kernel(xtf, 'channels_first'))
-            assert ztf.shape == (3, 2, 4, 5)
-
-            xval = np.random.random((6, 5, 4, 3, 2))
-            xtf = KTF.variable(xval, dtype=dtype)
-            ztf = KTF.eval(KTF._preprocess_conv3d_kernel(xtf, 'channels_first'))
-            assert ztf.shape == (4, 3, 2, 5, 6)
-
-        xval = np.random.random((5, 4, 3, 2))
-        xtf = KTF.variable(xval)
-        ztf = KTF.eval(KTF._postprocess_conv2d_output(xtf, 'channels_first'))
-        assert ztf.shape == (5, 2, 4, 3)
-
-        xval = np.random.random((6, 5, 4, 3, 2))
-        xtf = KTF.variable(xval)
-        ztf = KTF.eval(KTF._postprocess_conv3d_output(xtf, 'channels_first'))
-        assert ztf.shape == (6, 2, 5, 4, 3)
-
     def test_pooling_invalid_use(self):
         for (input_shape, pool_size) in zip([(5, 10, 12, 3), (5, 10, 12, 6, 3)], [(2, 2), (2, 2, 2)]):
             for k in BACKENDS:
@@ -1028,7 +1000,7 @@ class TestBackend(object):
                                        BACKENDS, cntk_dynamicity=True,
                                        data_format=data_format)
 
-        # Test invalid use casess
+        # Test invalid use cases
         for k in BACKENDS:
             x = k.variable(np.random.random(x_shape))
             b = k.variable(np.random.random(bias_shape))
@@ -1396,6 +1368,14 @@ class TestBackend(object):
 
         # Restore old value
         set_floatx(old_floatx)
+
+    def test_variable_support_bool_dtype(self):
+        # Github issue: 7819
+        if K.backend() == 'tensorflow':
+            assert K.dtype(K.variable(1, dtype='int16')) == 'int16'
+            assert K.dtype(K.variable(False, dtype='bool')) == 'bool'
+            with pytest.raises(TypeError):
+                K.variable('', dtype='unsupported')
 
 
 if __name__ == '__main__':
