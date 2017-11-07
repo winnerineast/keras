@@ -243,9 +243,8 @@ class RNN(Layer):
             at the level of the first layer
             (e.g. via the `input_shape` argument)
 
-    # Input shapes
-        3D tensor with shape `(batch_size, timesteps, input_dim)`,
-        (Optional) 2D tensors with shape `(batch_size, output_dim)`.
+    # Input shape
+        3D tensor with shape `(batch_size, timesteps, input_dim)`.
 
     # Output shape
         - if `return_state`: a list of tensors. The first tensor is
@@ -454,9 +453,10 @@ class RNN(Layer):
             # initial_state was passed in call, check compatibility
             if not [spec.shape[-1] for spec in self.state_spec] == state_size:
                 raise ValueError(
-                    'an initial_state was passed that is not compatible with'
-                    ' cell.state_size, state_spec: {}, cell.state_size:'
-                    ' {}'.format(self.state_spec, self.cell.state_size))
+                    'An initial_state was passed that is not compatible with '
+                    '`cell.state_size`. Received `state_spec`={}; '
+                    'However `cell.state_size` is '
+                    '{}'.format(self.state_spec, self.cell.state_size))
         else:
             self.state_spec = [InputSpec(shape=(None, dim))
                                for dim in state_size]
@@ -731,6 +731,8 @@ class RNN(Layer):
 
     @property
     def trainable_weights(self):
+        if not self.trainable:
+            return []
         if isinstance(self.cell, Layer):
             return self.cell.trainable_weights
         return []
@@ -738,6 +740,8 @@ class RNN(Layer):
     @property
     def non_trainable_weights(self):
         if isinstance(self.cell, Layer):
+            if not self.trainable:
+                return self.cell.weights
             return self.cell.non_trainable_weights
         return []
 
@@ -780,9 +784,6 @@ class SimpleRNNCell(Layer):
             the `recurrent_kernel` weights matrix
             (see [regularizer](../regularizers.md)).
         bias_regularizer: Regularizer function applied to the bias vector
-            (see [regularizer](../regularizers.md)).
-        activity_regularizer: Regularizer function applied to
-            the output of the layer (its "activation").
             (see [regularizer](../regularizers.md)).
         kernel_constraint: Constraint function applied to
             the `kernel` weights matrix
@@ -1157,9 +1158,6 @@ class GRUCell(Layer):
             the `recurrent_kernel` weights matrix
             (see [regularizer](../regularizers.md)).
         bias_regularizer: Regularizer function applied to the bias vector
-            (see [regularizer](../regularizers.md)).
-        activity_regularizer: Regularizer function applied to
-            the output of the layer (its "activation").
             (see [regularizer](../regularizers.md)).
         kernel_constraint: Constraint function applied to
             the `kernel` weights matrix
@@ -1633,9 +1631,6 @@ class LSTMCell(Layer):
             (see [regularizer](../regularizers.md)).
         bias_regularizer: Regularizer function applied to the bias vector
             (see [regularizer](../regularizers.md)).
-        activity_regularizer: Regularizer function applied to
-            the output of the layer (its "activation").
-            (see [regularizer](../regularizers.md)).
         kernel_constraint: Constraint function applied to
             the `kernel` weights matrix
             (see [constraints](../constraints.md)).
@@ -1802,10 +1797,15 @@ class LSTMCell(Layer):
                 inputs_f = inputs
                 inputs_c = inputs
                 inputs_o = inputs
-            x_i = K.dot(inputs_i, self.kernel_i) + self.bias_i
-            x_f = K.dot(inputs_f, self.kernel_f) + self.bias_f
-            x_c = K.dot(inputs_c, self.kernel_c) + self.bias_c
-            x_o = K.dot(inputs_o, self.kernel_o) + self.bias_o
+            x_i = K.dot(inputs_i, self.kernel_i)
+            x_f = K.dot(inputs_f, self.kernel_f)
+            x_c = K.dot(inputs_c, self.kernel_c)
+            x_o = K.dot(inputs_o, self.kernel_o)
+            if self.use_bias:
+                x_i = K.bias_add(x_i, self.bias_i)
+                x_f = K.bias_add(x_f, self.bias_f)
+                x_c = K.bias_add(x_c, self.bias_c)
+                x_o = K.bias_add(x_o, self.bias_o)
 
             if 0 < self.recurrent_dropout < 1.:
                 h_tm1_i = h_tm1 * rec_dp_mask[0]

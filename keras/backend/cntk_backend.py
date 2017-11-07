@@ -460,10 +460,6 @@ def truncated_normal(shape, mean=0.0, stddev=1.0, dtype=None, seed=None):
             stddev, seed=seed), dtype=dtype)
 
 
-def zeros_like(x, dtype=None, name=None):
-    return x * 0
-
-
 def dtype(x):
     return _convert_dtype_string(x.dtype)
 
@@ -488,7 +484,11 @@ def eye(size, dtype=None, name=None):
     return variable(np.eye(size), dtype, name)
 
 
-def ones_like(x, name=None):
+def zeros_like(x, dtype=None, name=None):
+    return x * 0
+
+
+def ones_like(x, dtype=None, name=None):
     return zeros_like(x) + 1
 
 
@@ -2131,8 +2131,10 @@ def conv2d_transpose(x, kernel, output_shape, strides=(1, 1),
     return _postprocess_conv2d_output(x, data_format)
 
 
-def identity(x):
-    return C.alias(x, name=('%s_alias' % (x.name)))
+def identity(x, name=None):
+    if name is None:
+        name = '%s_alias' % x.name
+    return C.alias(x, name=name)
 
 
 def _preprocess_conv2d_input(x, data_format):
