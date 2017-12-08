@@ -349,7 +349,8 @@ class TestBackend(object):
 
     def test_value_manipulation(self):
         val = np.random.random((4, 2))
-        for function_name in ['get_value', 'count_params', 'get_variable_shape']:
+        for function_name in ['get_value', 'count_params',
+                              'int_shape', 'get_variable_shape']:
             v_list = [getattr(k, function_name)(k.variable(val))
                       for k in BACKENDS]
 
@@ -905,8 +906,8 @@ class TestBackend(object):
         mean = 0.
         std = 1.
         for k in BACKENDS:
-            rand = k.eval(k.random_normal((200, 100), mean=mean, stddev=std))
-            assert rand.shape == (200, 100)
+            rand = k.eval(k.random_normal((300, 100), mean=mean, stddev=std))
+            assert rand.shape == (300, 100)
             assert np.abs(np.mean(rand) - mean) < 0.015
             assert np.abs(np.std(rand) - std) < 0.015
 

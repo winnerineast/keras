@@ -11,8 +11,10 @@ import sys
 import tarfile
 import threading
 import time
+import traceback
 import zipfile
 from abc import abstractmethod
+from contextlib import closing
 from multiprocessing.pool import ThreadPool
 
 import numpy as np
@@ -369,7 +371,7 @@ class Sequence(object):
 # Global variables to be shared across processes
 _SHARED_SEQUENCES = {}
 # We use a Value to provide unique id to different processes.
-_SEQUENCE_COUNTER = multiprocessing.Value('i', 0)
+_SEQUENCE_COUNTER = None
 
 
 def get_index(uid, i):
@@ -465,8 +467,11 @@ class OrderedEnqueuer(SequenceEnqueuer):
     def __init__(self, sequence,
                  use_multiprocessing=False,
                  shuffle=False):
-        global _SEQUENCE_COUNTER
         self.sequence = sequence
+
+        global _SEQUENCE_COUNTER
+        if _SEQUENCE_COUNTER is None:
+            _SEQUENCE_COUNTER = multiprocessing.Value('i', 0)
 
         # Doing Multiprocessing.Value += x is not process-safe.
         with _SEQUENCE_COUNTER.get_lock():
@@ -475,7 +480,7 @@ class OrderedEnqueuer(SequenceEnqueuer):
         self.use_multiprocessing = use_multiprocessing
         self.shuffle = shuffle
         self.workers = 0
-        self.executor = None
+        self.executor_fn = None
         self.queue = None
         self.run_thread = None
         self.stop_signal = None
@@ -492,9 +497,9 @@ class OrderedEnqueuer(SequenceEnqueuer):
                 (when full, workers could block on `put()`)
         """
         if self.use_multiprocessing:
-            self.executor = multiprocessing.Pool(workers)
+            self.executor_fn = lambda: multiprocessing.Pool(workers)
         else:
-            self.executor = ThreadPool(workers)
+            self.executor_fn = lambda: ThreadPool(workers)
         self.workers = workers
         self.queue = queue.Queue(max_queue_size)
         self.stop_signal = threading.Event()
@@ -516,18 +521,20 @@ class OrderedEnqueuer(SequenceEnqueuer):
         while True:
             if self.shuffle:
                 random.shuffle(sequence)
-            for i in sequence:
+
+            with closing(self.executor_fn()) as executor:
+                for i in sequence:
+                    if self.stop_signal.is_set():
+                        return
+                    self.queue.put(
+                        executor.apply_async(get_index, (self.uid, i)), block=True)
+
+                # Done with the current epoch, waiting for the final batches
+                self._wait_queue()
+
                 if self.stop_signal.is_set():
+                    # We're done
                     return
-                self.queue.put(
-                    self.executor.apply_async(get_index, (self.uid, i)), block=True)
-
-            # Done with the current epoch, waiting for the final batches
-            self._wait_queue()
-
-            if self.stop_signal.is_set():
-                # We're done
-                return
 
             # Call the internal on epoch end.
             self.sequence.on_epoch_end()
@@ -550,18 +557,12 @@ class OrderedEnqueuer(SequenceEnqueuer):
                     yield inputs
         except Exception as e:
             self.stop()
-            raise StopIteration(e)
+            six.raise_from(StopIteration(e), e)
 
     def _send_sequence(self):
         """Send current Sequence to all workers."""
         global _SHARED_SEQUENCES
         _SHARED_SEQUENCES[self.uid] = self.sequence  # For new processes that may spawn
-
-        self._close_pool()
-        if self.use_multiprocessing:
-            self.executor = multiprocessing.Pool(self.workers)
-        else:
-            self.executor = ThreadPool(self.workers)
 
     def stop(self, timeout=None):
         """Stops running threads and wait for them to exit, if necessary.
@@ -577,13 +578,8 @@ class OrderedEnqueuer(SequenceEnqueuer):
             self.queue.queue.clear()
             self.queue.unfinished_tasks = 0
             self.queue.not_full.notify()
-        self._close_pool()
         self.run_thread.join(timeout)
         _SHARED_SEQUENCES[self.uid] = None
-
-    def _close_pool(self):
-        self.executor.close()
-        self.executor.join()
 
 
 class GeneratorEnqueuer(SequenceEnqueuer):
@@ -611,6 +607,7 @@ class GeneratorEnqueuer(SequenceEnqueuer):
         self._use_multiprocessing = use_multiprocessing
         self._threads = []
         self._stop_event = None
+        self._manager = None
         self.queue = None
         self.seed = seed
 
@@ -628,18 +625,27 @@ class GeneratorEnqueuer(SequenceEnqueuer):
                 try:
                     if self._use_multiprocessing or self.queue.qsize() < max_queue_size:
                         generator_output = next(self._generator)
-                        self.queue.put(generator_output)
+                        self.queue.put((True, generator_output))
                     else:
                         time.sleep(self.wait_time)
                 except StopIteration:
                     break
-                except Exception:
+                except Exception as e:
+                    # Can't pick tracebacks.
+                    # As a compromise, print the traceback and pickle None instead.
+                    if self._use_multiprocessing:
+                        traceback.print_exc()
+                        setattr(e, '__traceback__', None)
+                    elif not hasattr(e, '__traceback__'):
+                        setattr(e, '__traceback__', sys.exc_info()[2])
+                    self.queue.put((False, e))
                     self._stop_event.set()
-                    raise
+                    break
 
         try:
             if self._use_multiprocessing:
-                self.queue = multiprocessing.Queue(maxsize=max_queue_size)
+                self._manager = multiprocessing.Manager()
+                self.queue = self._manager.Queue(maxsize=max_queue_size)
                 self._stop_event = multiprocessing.Event()
             else:
                 self.queue = queue.Queue()
@@ -683,9 +689,8 @@ class GeneratorEnqueuer(SequenceEnqueuer):
                 else:
                     thread.join(timeout)
 
-        if self._use_multiprocessing:
-            if self.queue is not None:
-                self.queue.close()
+        if self._manager:
+            self._manager.shutdown()
 
         self._threads = []
         self._stop_event = None
@@ -701,12 +706,22 @@ class GeneratorEnqueuer(SequenceEnqueuer):
         """
         while self.is_running():
             if not self.queue.empty():
-                inputs = self.queue.get()
-                if inputs is not None:
-                    yield inputs
+                success, value = self.queue.get()
+                # Rethrow any exceptions found in the queue
+                if not success:
+                    six.reraise(value.__class__, value, value.__traceback__)
+                # Yield regular values
+                if value is not None:
+                    yield value
             else:
                 all_finished = all([not thread.is_alive() for thread in self._threads])
                 if all_finished and self.queue.empty():
                     raise StopIteration()
                 else:
                     time.sleep(self.wait_time)
+
+        # Make sure to rethrow the first exception in the queue, if any
+        while not self.queue.empty():
+            success, value = self.queue.get()
+            if not success:
+                six.reraise(value.__class__, value, value.__traceback__)
