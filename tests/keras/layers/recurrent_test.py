@@ -70,7 +70,7 @@ def test_stateful_invalid_use(layer_class):
 
 
 @rnn_test
-@pytest.mark.skipif((K.backend() in ['cntk', 'theano']),
+@pytest.mark.skipif((K.backend() in ['theano']),
                     reason='Not supported.')
 def test_dropout(layer_class):
     for unroll in [True, False]:
@@ -232,7 +232,7 @@ def test_trainability(layer_class):
 @keras_test
 def test_masking_layer():
     ''' This test based on a previously failing issue here:
-    https://github.com/fchollet/keras/issues/1567
+    https://github.com/keras-team/keras/issues/1567
     '''
     inputs = np.random.random((6, 3, 4))
     targets = np.abs(np.random.random((6, 3, 5)))
@@ -355,7 +355,7 @@ def test_initial_states_as_other_inputs(layer_class):
 @rnn_test
 def test_specify_state_with_masking(layer_class):
     ''' This test based on a previously failing issue here:
-    https://github.com/fchollet/keras/issues/1567
+    https://github.com/keras-team/keras/issues/1567
     '''
     num_states = 2 if layer_class is recurrent.LSTM else 1
 
@@ -594,6 +594,20 @@ def test_stacked_rnn_attributes():
     y = K.sum(x)
     cells[0].add_loss(y, inputs=x)
     assert layer.get_losses_for(x) == [y]
+
+
+@keras_test
+def test_stacked_rnn_compute_output_shape():
+    cells = [recurrent.LSTMCell(3),
+             recurrent.LSTMCell(6)]
+    layer = recurrent.RNN(cells, return_state=True, return_sequences=True)
+    output_shape = layer.compute_output_shape((None, timesteps, embedding_dim))
+    expected_output_shape = [(None, timesteps, 6),
+                             (None, 6),
+                             (None, 6),
+                             (None, 3),
+                             (None, 3)]
+    assert output_shape == expected_output_shape
 
 
 @rnn_test

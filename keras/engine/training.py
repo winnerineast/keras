@@ -1698,8 +1698,7 @@ class Model(Container):
             steps: Integer or `None`.
                 Total number of steps (batches of samples)
                 before declaring the evaluation round finished.
-                The default `None` is equal to the number of samples in
-                your dataset divided by the batch size.
+                Ignored with the default value of `None`.
 
 
         # Returns
@@ -2107,6 +2106,8 @@ class Model(Container):
                 output_generator = generator
 
             callback_model.stop_training = False
+            # Construct epoch logs.
+            epoch_logs = {}
             while epoch < epochs:
                 callbacks.on_epoch_begin(epoch)
                 steps_done = 0
@@ -2153,8 +2154,6 @@ class Model(Container):
 
                     callbacks.on_batch_end(batch_index, batch_logs)
 
-                    # Construct epoch logs.
-                    epoch_logs = {}
                     batch_index += 1
                     steps_done += 1
 
@@ -2446,6 +2445,6 @@ class Model(Container):
             else:
                 return np.concatenate(all_outs[0])
         if steps_done == 1:
-            return [out for out in all_outs]
+            return [out[0] for out in all_outs]
         else:
             return [np.concatenate(out) for out in all_outs]

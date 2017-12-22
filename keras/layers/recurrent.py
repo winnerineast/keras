@@ -395,9 +395,10 @@ class RNN(Layer):
             input_shape = input_shape[0]
 
         if hasattr(self.cell.state_size, '__len__'):
-            output_dim = self.cell.state_size[0]
+            state_size = self.cell.state_size
         else:
-            output_dim = self.cell.state_size
+            state_size = [self.cell.state_size]
+        output_dim = state_size[0]
 
         if self.return_sequences:
             output_shape = (input_shape[0], input_shape[1], output_dim)
@@ -405,7 +406,7 @@ class RNN(Layer):
             output_shape = (input_shape[0], output_dim)
 
         if self.return_state:
-            state_shape = [(input_shape[0], output_dim) for _ in self.states]
+            state_shape = [(input_shape[0], dim) for dim in state_size]
             return [output_shape] + state_shape
         else:
             return output_shape
@@ -864,13 +865,14 @@ class SimpleRNNCell(Layer):
     def call(self, inputs, states, training=None):
         prev_output = states[0]
         if 0 < self.dropout < 1 and self._dropout_mask is None:
-            self._dropout_mask = _generate_dropout_mask(K.shape(inputs),
-                                                        self.dropout,
-                                                        training=training)
+            self._dropout_mask = _generate_dropout_mask(
+                _generate_dropout_ones(inputs, K.shape(inputs)[-1]),
+                self.dropout,
+                training=training)
         if (0 < self.recurrent_dropout < 1 and
                 self._recurrent_dropout_mask is None):
             self._recurrent_dropout_mask = _generate_dropout_mask(
-                [K.shape(inputs)[0], self.units],
+                _generate_dropout_ones(inputs, self.units),
                 self.recurrent_dropout,
                 training=training)
 
@@ -986,16 +988,6 @@ class SimpleRNN(RNN):
             warnings.warn('The `implementation` argument '
                           'in `SimpleRNN` has been deprecated. '
                           'Please remove it from your layer call.')
-        if K.backend() == 'cntk':
-            if not kwargs.get('unroll') and (dropout > 0 or recurrent_dropout > 0):
-                warnings.warn(
-                    'RNN dropout is not supported with the CNTK backend '
-                    'when using dynamic RNNs (i.e. non-unrolled). '
-                    'You can either set `unroll=True`, '
-                    'set `dropout` and `recurrent_dropout` to 0, '
-                    'or use the TensorFlow backend.')
-                dropout = 0.
-                recurrent_dropout = 0.
         if K.backend() == 'theano':
             warnings.warn(
                 'RNN dropout is no longer supported with the Theano backend '
@@ -1257,14 +1249,15 @@ class GRUCell(Layer):
         h_tm1 = states[0]  # previous memory
 
         if 0 < self.dropout < 1 and self._dropout_mask is None:
-            self._dropout_mask = _generate_dropout_mask(K.shape(inputs),
-                                                        self.dropout,
-                                                        training=training,
-                                                        count=3)
+            self._dropout_mask = _generate_dropout_mask(
+                _generate_dropout_ones(inputs, K.shape(inputs)[-1]),
+                self.dropout,
+                training=training,
+                count=3)
         if (0 < self.recurrent_dropout < 1 and
                 self._recurrent_dropout_mask is None):
             self._recurrent_dropout_mask = _generate_dropout_mask(
-                [K.shape(inputs)[0], self.units],
+                _generate_dropout_ones(inputs, self.units),
                 self.recurrent_dropout,
                 training=training,
                 count=3)
@@ -1440,16 +1433,6 @@ class GRU(RNN):
             warnings.warn('`implementation=0` has been deprecated, '
                           'and now defaults to `implementation=1`.'
                           'Please update your layer call.')
-        if K.backend() == 'cntk':
-            if not kwargs.get('unroll') and (dropout > 0 or recurrent_dropout > 0):
-                warnings.warn(
-                    'RNN dropout is not supported with the CNTK backend '
-                    'when using dynamic RNNs (i.e. non-unrolled). '
-                    'You can either set `unroll=True`, '
-                    'set `dropout` and `recurrent_dropout` to 0, '
-                    'or use a different backend.')
-                dropout = 0.
-                recurrent_dropout = 0.
         if K.backend() == 'theano':
             warnings.warn(
                 'RNN dropout is no longer supported with the Theano backend '
@@ -1739,14 +1722,15 @@ class LSTMCell(Layer):
 
     def call(self, inputs, states, training=None):
         if 0 < self.dropout < 1 and self._dropout_mask is None:
-            self._dropout_mask = _generate_dropout_mask(K.shape(inputs),
-                                                        self.dropout,
-                                                        training=training,
-                                                        count=4)
+            self._dropout_mask = _generate_dropout_mask(
+                _generate_dropout_ones(inputs, K.shape(inputs)[-1]),
+                self.dropout,
+                training=training,
+                count=4)
         if (0 < self.recurrent_dropout < 1 and
                 self._recurrent_dropout_mask is None):
             self._recurrent_dropout_mask = _generate_dropout_mask(
-                [K.shape(inputs)[0], self.units],
+                _generate_dropout_ones(inputs, self.units),
                 self.recurrent_dropout,
                 training=training,
                 count=4)
@@ -1935,16 +1919,6 @@ class LSTM(RNN):
             warnings.warn('`implementation=0` has been deprecated, '
                           'and now defaults to `implementation=1`.'
                           'Please update your layer call.')
-        if K.backend() == 'cntk':
-            if not kwargs.get('unroll') and (dropout > 0 or recurrent_dropout > 0):
-                warnings.warn(
-                    'RNN dropout is not supported with the CNTK backend '
-                    'when using dynamic RNNs (i.e. non-unrolled). '
-                    'You can either set `unroll=True`, '
-                    'set `dropout` and `recurrent_dropout` to 0, '
-                    'or use a different backend.')
-                dropout = 0.
-                recurrent_dropout = 0.
         if K.backend() == 'theano':
             warnings.warn(
                 'RNN dropout is no longer supported with the Theano backend '
@@ -2084,9 +2058,17 @@ class LSTM(RNN):
         return cls(**config)
 
 
-def _generate_dropout_mask(shape, rate, training=None, count=1):
-    ones = K.ones(shape)
+def _generate_dropout_ones(inputs, dims):
+    # Currently, CTNK can't instantiate `ones` with symbolic shapes.
+    # Will update workaround once CTNK supports it.
+    if K.backend() == 'cntk':
+        ones = K.ones_like(K.reshape(inputs[:, 0], (-1, 1)))
+        return K.tile(ones, (1, dims))
+    else:
+        return K.ones((K.shape(inputs)[0], dims))
 
+
+def _generate_dropout_mask(ones, rate, training=None, count=1):
     def dropped_inputs():
         return K.dropout(ones, rate)
 

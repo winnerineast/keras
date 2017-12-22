@@ -38,7 +38,7 @@ install:
   # Useful for debugging any issues with conda
   - conda info -a
 
-  - conda create -q -n test-environment python=$TRAVIS_PYTHON_VERSION numpy scipy matplotlib pandas pytest h5py
+  - conda create -q -n test-environment python=$TRAVIS_PYTHON_VERSION numpy nose scipy matplotlib pandas pytest h5py
   - source activate test-environment
   - conda install mkl mkl-service
   - pip install theano
@@ -60,9 +60,9 @@ install:
   
   # install cntk
   - if [[ "$TRAVIS_PYTHON_VERSION" == "2.7" ]]; then
-      pip install https://cntk.ai/PythonWheel/CPU-Only/cntk-2.2-cp27-cp27mu-linux_x86_64.whl;
+      pip install https://cntk.ai/PythonWheel/CPU-Only/cntk-2.3.1-cp27-cp27mu-linux_x86_64.whl;
     elif [[ "$TRAVIS_PYTHON_VERSION" == "3.6" ]]; then
-      pip install https://cntk.ai/PythonWheel/CPU-Only/cntk-2.2-cp36-cp36m-linux_x86_64.whl;
+      pip install https://cntk.ai/PythonWheel/CPU-Only/cntk-2.3.1-cp36-cp36m-linux_x86_64.whl;
     fi
 
   # install pydot for visualization tests

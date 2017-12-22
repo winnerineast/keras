@@ -382,8 +382,8 @@ class ImageDataGenerator(object):
         zca_whitening: apply ZCA whitening.
         zca_epsilon: epsilon for ZCA whitening. Default is 1e-6.
         rotation_range: degrees (0 to 180).
-        width_shift_range: fraction of total width.
-        height_shift_range: fraction of total height.
+        width_shift_range: fraction of total width, if < 1, or pixels if >= 1.
+        height_shift_range: fraction of total height, if < 1, or pixels if >= 1.
         shear_range: shear intensity (shear angle in radians).
         zoom_range: amount of zoom. if scalar z, zoom will be randomly picked
             in the range [1-z, 1+z]. A sequence of two can be passed instead
@@ -479,6 +479,32 @@ class ImageDataGenerator(object):
             raise ValueError('`zoom_range` should be a float or '
                              'a tuple or list of two floats. '
                              'Received arg: ', zoom_range)
+        if zca_whitening:
+            if not featurewise_center:
+                self.featurewise_center = True
+                warnings.warn('This ImageDataGenerator specifies '
+                              '`zca_whitening`, which overrides '
+                              'setting of `featurewise_center`.')
+            if featurewise_std_normalization:
+                self.featurewise_std_normalization = False
+                warnings.warn('This ImageDataGenerator specifies '
+                              '`zca_whitening` '
+                              'which overrides setting of'
+                              '`featurewise_std_normalization`.')
+        if featurewise_std_normalization:
+            if not featurewise_center:
+                self.featurewise_center = True
+                warnings.warn('This ImageDataGenerator specifies '
+                              '`featurewise_std_normalization`, '
+                              'which overrides setting of '
+                              '`featurewise_center`.')
+        if samplewise_std_normalization:
+            if not samplewise_center:
+                self.samplewise_center = True
+                warnings.warn('This ImageDataGenerator specifies '
+                              '`samplewise_std_normalization`, '
+                              'which overrides setting of '
+                              '`samplewise_center`.')
 
     def flow(self, x, y=None, batch_size=32, shuffle=True, seed=None,
              save_to_dir=None, save_prefix='', save_format='png'):
@@ -529,7 +555,7 @@ class ImageDataGenerator(object):
         if self.samplewise_center:
             x -= np.mean(x, keepdims=True)
         if self.samplewise_std_normalization:
-            x /= np.std(x, keepdims=True) + 1e-7
+            x /= (np.std(x, keepdims=True) + K.epsilon())
 
         if self.featurewise_center:
             if self.mean is not None:
@@ -541,7 +567,7 @@ class ImageDataGenerator(object):
                               'first by calling `.fit(numpy_data)`.')
         if self.featurewise_std_normalization:
             if self.std is not None:
-                x /= (self.std + 1e-7)
+                x /= (self.std + K.epsilon())
             else:
                 warnings.warn('This ImageDataGenerator specifies '
                               '`featurewise_std_normalization`, but it hasn\'t '
@@ -585,12 +611,16 @@ class ImageDataGenerator(object):
             theta = 0
 
         if self.height_shift_range:
-            tx = np.random.uniform(-self.height_shift_range, self.height_shift_range) * x.shape[img_row_axis]
+            tx = np.random.uniform(-self.height_shift_range, self.height_shift_range)
+            if self.height_shift_range < 1:
+                tx *= x.shape[img_row_axis]
         else:
             tx = 0
 
         if self.width_shift_range:
-            ty = np.random.uniform(-self.width_shift_range, self.width_shift_range) * x.shape[img_col_axis]
+            ty = np.random.uniform(-self.width_shift_range, self.width_shift_range)
+            if self.width_shift_range < 1:
+                ty *= x.shape[img_col_axis]
         else:
             ty = 0
 

@@ -1090,7 +1090,7 @@ def batch_dot(x, y, axes=None):
 
     # Examples
         Assume `x = [[1, 2], [3, 4]]` and `y = [[5, 6], [7, 8]]`
-        `batch_dot(x, y, axes=1) = [[17, 53]]` which is the main diagonal
+        `batch_dot(x, y, axes=1) = [[17], [53]]` which is the main diagonal
         of `x.dot(y.T)`, although we never have to calculate the off-diagonal
         elements.
 
@@ -1684,6 +1684,114 @@ def cos(x):
     return tf.cos(x)
 
 
+def _regular_normalize_batch_in_training(x, gamma, beta,
+                                         reduction_axes, epsilon=1e-3):
+    """Non-fused version of `normalize_batch_in_training`.
+
+    # Arguments
+        x: Input tensor or variable.
+        gamma: Tensor by which to scale the input.
+        beta: Tensor with which to center the input.
+        reduction_axes: iterable of integers,
+            axes over which to normalize.
+        epsilon: Fuzz factor.
+
+    # Returns
+        A tuple length of 3, `(normalized_tensor, mean, variance)`.
+    """
+    mean, var = tf.nn.moments(x, reduction_axes,
+                              shift=None, name=None, keep_dims=False)
+    normed = tf.nn.batch_normalization(x, mean, var,
+                                       beta, gamma,
+                                       epsilon)
+    return normed, mean, var
+
+
+def _broadcast_normalize_batch_in_training(x, gamma, beta,
+                                           reduction_axes, epsilon=1e-3):
+    """Non-fused, broadcast version of `normalize_batch_in_training`.
+
+    # Arguments
+        x: Input tensor or variable.
+        gamma: Tensor by which to scale the input.
+        beta: Tensor with which to center the input.
+        reduction_axes: iterable of integers,
+            axes over which to normalize.
+        epsilon: Fuzz factor.
+
+    # Returns
+        A tuple length of 3, `(normalized_tensor, mean, variance)`.
+    """
+    mean, var = tf.nn.moments(x, reduction_axes,
+                              shift=None, name=None, keep_dims=False)
+    target_shape = []
+    for axis in range(ndim(x)):
+        if axis in reduction_axes:
+            target_shape.append(1)
+        else:
+            target_shape.append(tf.shape(x)[axis])
+    target_shape = tf.stack(target_shape)
+
+    broadcast_mean = tf.reshape(mean, target_shape)
+    broadcast_var = tf.reshape(var, target_shape)
+    if gamma is None:
+        broadcast_gamma = None
+    else:
+        broadcast_gamma = tf.reshape(gamma, target_shape)
+    if beta is None:
+        broadcast_beta = None
+    else:
+        broadcast_beta = tf.reshape(beta, target_shape)
+
+    normed = tf.nn.batch_normalization(
+        x,
+        broadcast_mean,
+        broadcast_var,
+        broadcast_beta,
+        broadcast_gamma,
+        epsilon)
+    return normed, mean, var
+
+
+def _fused_normalize_batch_in_training(x, gamma, beta, reduction_axes,
+                                       epsilon=1e-3):
+    """Fused version of `normalize_batch_in_training`.
+
+    # Arguments
+        x: Input tensor or variable.
+        gamma: Tensor by which to scale the input.
+        beta: Tensor with which to center the input.
+        reduction_axes: iterable of integers,
+            axes over which to normalize.
+        epsilon: Fuzz factor.
+
+    # Returns
+        A tuple length of 3, `(normalized_tensor, mean, variance)`.
+    """
+    if list(reduction_axes) == [0, 1, 2]:
+        normalization_axis = 3
+        tf_data_format = 'NHWC'
+    else:
+        normalization_axis = 1
+        tf_data_format = 'NCHW'
+
+    if gamma is None:
+        gamma = tf.constant(1.0,
+                            dtype=x.dtype,
+                            shape=[x.get_shape()[normalization_axis]])
+    if beta is None:
+        beta = tf.constant(0.0,
+                           dtype=x.dtype,
+                           shape=[x.get_shape()[normalization_axis]])
+
+    return tf.nn.fused_batch_norm(
+        x,
+        gamma,
+        beta,
+        epsilon=epsilon,
+        data_format=tf_data_format)
+
+
 def normalize_batch_in_training(x, gamma, beta,
                                 reduction_axes, epsilon=1e-3):
     """Computes mean and std for batch then apply batch_normalization on batch.
@@ -1699,36 +1807,23 @@ def normalize_batch_in_training(x, gamma, beta,
     # Returns
         A tuple length of 3, `(normalized_tensor, mean, variance)`.
     """
-    mean, var = tf.nn.moments(x, reduction_axes,
-                              shift=None, name=None, keep_dims=False)
-    if sorted(reduction_axes) == list(range(ndim(x)))[:-1]:
-        normed = tf.nn.batch_normalization(x, mean, var,
-                                           beta, gamma,
-                                           epsilon)
+    if ndim(x) == 4 and list(reduction_axes) in [[0, 1, 2], [0, 2, 3]]:
+        if not _has_nchw_support() and list(reduction_axes) == [0, 2, 3]:
+            return _broadcast_normalize_batch_in_training(x, gamma, beta,
+                                                          reduction_axes,
+                                                          epsilon=epsilon)
+        return _fused_normalize_batch_in_training(
+            x, gamma, beta, reduction_axes,
+            epsilon=epsilon)
     else:
-        # need broadcasting
-        target_shape = []
-        for axis in range(ndim(x)):
-            if axis in reduction_axes:
-                target_shape.append(1)
-            else:
-                target_shape.append(tf.shape(x)[axis])
-        target_shape = tf.stack(target_shape)
-
-        broadcast_mean = tf.reshape(mean, target_shape)
-        broadcast_var = tf.reshape(var, target_shape)
-        if gamma is None:
-            broadcast_gamma = None
+        if sorted(reduction_axes) == list(range(ndim(x)))[:-1]:
+            return _regular_normalize_batch_in_training(x, gamma, beta,
+                                                        reduction_axes,
+                                                        epsilon=epsilon)
         else:
-            broadcast_gamma = tf.reshape(gamma, target_shape)
-        if beta is None:
-            broadcast_beta = None
-        else:
-            broadcast_beta = tf.reshape(beta, target_shape)
-        normed = tf.nn.batch_normalization(x, broadcast_mean, broadcast_var,
-                                           broadcast_beta, broadcast_gamma,
-                                           epsilon)
-    return normed, mean, var
+            return _broadcast_normalize_batch_in_training(x, gamma, beta,
+                                                          reduction_axes,
+                                                          epsilon=epsilon)
 
 
 def batch_normalization(x, mean, var, beta, gamma, epsilon=1e-3):
@@ -2300,7 +2395,7 @@ class Function(object):
     """Runs a computation graph.
 
     It's possible to pass arguments to `tf.Session.run()` via `session_kwargs`.
-    In particular additonal operations via `fetches` argument and additional
+    In particular additional operations via `fetches` argument and additional
     tensor substitutions via `feed_dict` arguments. Note that given
     substitutions are merged with substitutions from `inputs`. Even though
     `feed_dict` is passed once in the constructor (called in `model.compile()`)
@@ -3573,7 +3668,11 @@ def bias_add(x, bias, data_format=None):
     elif ndim(x) == 4:
         if data_format == 'channels_first':
             if len(bias_shape) == 1:
-                x += reshape(bias, (1, bias_shape[0], 1, 1))
+                if _has_nchw_support():
+                    x = tf.nn.bias_add(x, bias,
+                                       data_format='NCHW')
+                else:
+                    x += reshape(bias, (1, bias_shape[0], 1, 1))
             else:
                 x += reshape(bias, (1, bias_shape[2]) + bias_shape[:2])
         elif data_format == 'channels_last':
@@ -3756,7 +3855,7 @@ def ctc_batch_cost(y_true, y_pred, input_length, label_length):
     input_length = tf.to_int32(tf.squeeze(input_length))
     sparse_labels = tf.to_int32(ctc_label_dense_to_sparse(y_true, label_length))
 
-    y_pred = tf.log(tf.transpose(y_pred, perm=[1, 0, 2]) + 1e-8)
+    y_pred = tf.log(tf.transpose(y_pred, perm=[1, 0, 2]) + epsilon())
 
     return tf.expand_dims(ctc.ctc_loss(inputs=y_pred,
                                        labels=sparse_labels,
@@ -3792,7 +3891,7 @@ def ctc_decode(y_pred, input_length, greedy=True, beam_width=100,
             Tensor `(top_paths, )` that contains
                 the log probability of each decoded sequence.
     """
-    y_pred = tf.log(tf.transpose(y_pred, perm=[1, 0, 2]) + 1e-8)
+    y_pred = tf.log(tf.transpose(y_pred, perm=[1, 0, 2]) + epsilon())
     input_length = tf.to_int32(input_length)
 
     if greedy:
