@@ -404,7 +404,7 @@ class ModelCheckpoint(Callback):
                 else:
                     if self.monitor_op(current, self.best):
                         if self.verbose > 0:
-                            print('Epoch %05d: %s improved from %0.5f to %0.5f,'
+                            print('\nEpoch %05d: %s improved from %0.5f to %0.5f,'
                                   ' saving model to %s'
                                   % (epoch + 1, self.monitor, self.best,
                                      current, filepath))
@@ -415,11 +415,11 @@ class ModelCheckpoint(Callback):
                             self.model.save(filepath, overwrite=True)
                     else:
                         if self.verbose > 0:
-                            print('Epoch %05d: %s did not improve' %
+                            print('\nEpoch %05d: %s did not improve' %
                                   (epoch + 1, self.monitor))
             else:
                 if self.verbose > 0:
-                    print('Epoch %05d: saving model to %s' % (epoch + 1, filepath))
+                    print('\nEpoch %05d: saving model to %s' % (epoch + 1, filepath))
                 if self.save_weights_only:
                     self.model.save_weights(filepath, overwrite=True)
                 else:
@@ -560,11 +560,13 @@ class LearningRateScheduler(Callback):
         schedule: a function that takes an epoch index as input
             (integer, indexed from 0) and returns a new
             learning rate as output (float).
+        verbose: int. 0: quiet, 1: update messages.
     """
 
-    def __init__(self, schedule):
+    def __init__(self, schedule, verbose=0):
         super(LearningRateScheduler, self).__init__()
         self.schedule = schedule
+        self.verbose = verbose
 
     def on_epoch_begin(self, epoch, logs=None):
         if not hasattr(self.model.optimizer, 'lr'):
@@ -574,6 +576,9 @@ class LearningRateScheduler(Callback):
             raise ValueError('The output of the "schedule" function '
                              'should be float.')
         K.set_value(self.model.optimizer.lr, lr)
+        if self.verbose > 0:
+            print('\nEpoch %05d: LearningRateScheduler reducing learning '
+                  'rate to %s.' % (epoch + 1, lr))
 
 
 class TensorBoard(Callback):
@@ -874,7 +879,6 @@ class ReduceLROnPlateau(Callback):
             self.best = -np.Inf
         self.cooldown_counter = 0
         self.wait = 0
-        self.lr_epsilon = self.min_lr * 1e-4
 
     def on_train_begin(self, logs=None):
         self._reset()
@@ -901,12 +905,13 @@ class ReduceLROnPlateau(Callback):
             elif not self.in_cooldown():
                 if self.wait >= self.patience:
                     old_lr = float(K.get_value(self.model.optimizer.lr))
-                    if old_lr > self.min_lr + self.lr_epsilon:
+                    if old_lr > self.min_lr:
                         new_lr = old_lr * self.factor
                         new_lr = max(new_lr, self.min_lr)
                         K.set_value(self.model.optimizer.lr, new_lr)
                         if self.verbose > 0:
-                            print('\nEpoch %05d: reducing learning rate to %s.' % (epoch + 1, new_lr))
+                            print('\nEpoch %05d: ReduceLROnPlateau reducing learning '
+                                  'rate to %s.' % (epoch + 1, new_lr))
                         self.cooldown_counter = self.cooldown
                         self.wait = 0
                 self.wait += 1
